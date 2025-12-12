@@ -24,8 +24,9 @@ A modern, AI-powered financial analysis platform built with React and FastAPI. U
 ### Backend
 - **FastAPI** - High-performance Python API
 - **Pandas** - Data processing and analysis
-- **Gemini AI** - Advanced AI responses
+- **Groq AI** - Advanced AI responses with LLaMA 3.3 70B model
 - **OpenPyXL** - Excel file processing
+- **Python-dotenv** - Environment variable management
 
 ## 📦 Installation
 
@@ -78,11 +79,17 @@ The platform intelligently processes Excel files with:
 
 ## 🔧 Configuration
 
-### Gemini API Setup
-1. Get your API key from [Google AI Studio](https://makersuite.google.com/app/apikey)
-2. Update `config.py` with your API key:
-```python
-GEMINI_API_KEY = "your-api-key-here"
+### Groq API Setup
+1. Get your API key from [Groq Console](https://console.groq.com)
+2. Create a `.env` file in the root directory:
+```bash
+GROQ_API_KEY=your-api-key-here
+CORS_ORIGINS=http://localhost:3000
+```
+
+For frontend configuration:
+```bash
+REACT_APP_API_URL=http://localhost:8000
 ```
 
 ## 📱 Screenshots
@@ -122,7 +129,9 @@ This project is licensed under the MIT License.
 For issues and questions:
 - Check the console for error messages
 - Ensure both frontend and backend are running
-- Verify your Gemini API key is correctly configured
+- Verify your Groq API key is correctly configured in `.env` file
+- See `DEPLOYMENT.md` for deployment instructions
+- See `SECURITY.md` for security best practices
 
 ---
 
