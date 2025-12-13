@@ -6,8 +6,6 @@ Handles user registration, login, and session management with MongoDB
 import os
 import hashlib
 import secrets
-import ssl
-import certifi
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from pymongo import MongoClient
@@ -18,21 +16,17 @@ MONGODB_URI = os.getenv("MONGODB_URI")
 if not MONGODB_URI:
     raise ValueError("MONGODB_URI environment variable is required")
 
-# Initialize MongoDB client with compatible SSL/TLS settings for Python 3.13
+# Initialize MongoDB client - let pymongo handle TLS automatically with srv connection
 try:
-    # Add connection string parameters for better compatibility
+    # Parse connection string and add parameters
     if "?" in MONGODB_URI:
-        connection_string = f"{MONGODB_URI}&retryWrites=true&w=majority"
+        connection_string = f"{MONGODB_URI}&retryWrites=true&w=majority&ssl=true&ssl_cert_reqs=CERT_NONE"
     else:
-        connection_string = f"{MONGODB_URI}?retryWrites=true&w=majority"
+        connection_string = f"{MONGODB_URI}?retryWrites=true&w=majority&ssl=true&ssl_cert_reqs=CERT_NONE"
     
     client = MongoClient(
         connection_string,
-        tls=True,
-        tlsCAFile=certifi.where(),
-        serverSelectionTimeoutMS=10000,
-        connectTimeoutMS=20000,
-        socketTimeoutMS=20000
+        serverSelectionTimeoutMS=10000
     )
     db = client.aura_treasury
     users_collection = db.users
