@@ -16,23 +16,37 @@ MONGODB_URI = os.getenv("MONGODB_URI")
 if not MONGODB_URI:
     raise ValueError("MONGODB_URI environment variable is required")
 
-# Initialize MongoDB client
+# Initialize MongoDB client with SSL/TLS parameters
 try:
-    client = MongoClient(MONGODB_URI)
+    client = MongoClient(
+        MONGODB_URI,
+        tls=True,
+        tlsAllowInvalidCertificates=False,
+        serverSelectionTimeoutMS=5000,
+        connectTimeoutMS=10000,
+        socketTimeoutMS=10000
+    )
     db = client.aura_treasury
     users_collection = db.users
     sessions_collection = db.sessions
     
-    # Create unique index on email
-    users_collection.create_index("email", unique=True)
-    sessions_collection.create_index("token", unique=True)
-    
-    # Test connection
-    client.admin.command('ping')
-    print("✓ MongoDB connected successfully")
-except ConnectionFailure as e:
-    print(f"✗ MongoDB connection failed: {e}")
+    print("✓ MongoDB client initialized")
+except Exception as e:
+    print(f"✗ MongoDB client initialization failed: {e}")
     raise
+
+def ensure_indexes():
+    """Create indexes if they don't exist - called lazily"""
+    try:
+        users_collection.create_index("email", unique=True)
+        sessions_collection.create_index("token", unique=True)
+        # Test connection
+        client.admin.command('ping')
+        print("✓ MongoDB connected and indexes created")
+        return True
+    except Exception as e:
+        print(f"⚠ MongoDB connection warning: {e}")
+        return False
 
 def hash_password(password: str, salt: str = None) -> tuple:
     """Hash password with salt"""
@@ -87,6 +101,9 @@ def register_user(email: str, password: str, name: str) -> Dict[str, Any]:
     Register a new user
     Returns: dict with success status and message
     """
+    # Ensure indexes are created
+    ensure_indexes()
+    
     # Check if user already exists
     if users_collection.find_one({"email": email}):
         return {
