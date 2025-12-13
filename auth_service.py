@@ -1,18 +1,38 @@
 """
 Authentication Service for Aura Treasury Analyst
-Handles user registration, login, and session management
+Handles user registration, login, and session management with MongoDB
 """
 
-import json
 import os
 import hashlib
 import secrets
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
+from pymongo import MongoClient
+from pymongo.errors import ConnectionFailure, DuplicateKeyError
 
-# User database file
-USER_DB_FILE = "users_db.json"
-SESSIONS_FILE = "sessions_db.json"
+# MongoDB connection
+MONGODB_URI = os.getenv("MONGODB_URI")
+if not MONGODB_URI:
+    raise ValueError("MONGODB_URI environment variable is required")
+
+# Initialize MongoDB client
+try:
+    client = MongoClient(MONGODB_URI)
+    db = client.aura_treasury
+    users_collection = db.users
+    sessions_collection = db.sessions
+    
+    # Create unique index on email
+    users_collection.create_index("email", unique=True)
+    sessions_collection.create_index("token", unique=True)
+    
+    # Test connection
+    client.admin.command('ping')
+    print("✓ MongoDB connected successfully")
+except ConnectionFailure as e:
+    print(f"✗ MongoDB connection failed: {e}")
+    raise
 
 def hash_password(password: str, salt: str = None) -> tuple:
     """Hash password with salt"""
@@ -28,80 +48,36 @@ def verify_password(password: str, stored_hash: str, salt: str) -> bool:
     password_hash, _ = hash_password(password, salt)
     return password_hash == stored_hash
 
-def load_users() -> Dict:
-    """Load users from database file"""
-    if not os.path.exists(USER_DB_FILE):
-        return {}
-    
-    try:
-        with open(USER_DB_FILE, 'r') as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"Error loading users: {e}")
-        return {}
 
-def save_users(users: Dict):
-    """Save users to database file"""
-    try:
-        with open(USER_DB_FILE, 'w') as f:
-            json.dump(users, f, indent=2)
-    except Exception as e:
-        print(f"Error saving users: {e}")
-
-def load_sessions() -> Dict:
-    """Load sessions from database file"""
-    if not os.path.exists(SESSIONS_FILE):
-        return {}
-    
-    try:
-        with open(SESSIONS_FILE, 'r') as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"Error loading sessions: {e}")
-        return {}
-
-def save_sessions(sessions: Dict):
-    """Save sessions to database file"""
-    try:
-        with open(SESSIONS_FILE, 'w') as f:
-            json.dump(sessions, f, indent=2)
-    except Exception as e:
-        print(f"Error saving sessions: {e}")
 
 def create_session(user_email: str) -> str:
     """Create a new session token for user"""
-    sessions = load_sessions()
-    
     # Generate secure session token
     session_token = secrets.token_urlsafe(32)
     
     # Store session with expiration (24 hours)
-    expiration = (datetime.now() + timedelta(hours=24)).isoformat()
+    expiration = datetime.now() + timedelta(hours=24)
     
-    sessions[session_token] = {
+    sessions_collection.insert_one({
+        "token": session_token,
         "email": user_email,
-        "created_at": datetime.now().isoformat(),
+        "created_at": datetime.now(),
         "expires_at": expiration
-    }
+    })
     
-    save_sessions(sessions)
     return session_token
 
 def validate_session(session_token: str) -> Optional[str]:
     """Validate session token and return user email if valid"""
-    sessions = load_sessions()
+    session = sessions_collection.find_one({"token": session_token})
     
-    if session_token not in sessions:
+    if not session:
         return None
     
-    session = sessions[session_token]
-    expiration = datetime.fromisoformat(session["expires_at"])
-    
     # Check if session has expired
-    if datetime.now() > expiration:
+    if datetime.now() > session["expires_at"]:
         # Remove expired session
-        del sessions[session_token]
-        save_sessions(sessions)
+        sessions_collection.delete_one({"token": session_token})
         return None
     
     return session["email"]
@@ -111,10 +87,8 @@ def register_user(email: str, password: str, name: str) -> Dict[str, Any]:
     Register a new user
     Returns: dict with success status and message
     """
-    users = load_users()
-    
     # Check if user already exists
-    if email in users:
+    if users_collection.find_one({"email": email}):
         return {
             "success": False,
             "message": "Email already registered"
@@ -138,37 +112,39 @@ def register_user(email: str, password: str, name: str) -> Dict[str, Any]:
     password_hash, salt = hash_password(password)
     
     # Create user record
-    users[email] = {
-        "name": name,
-        "email": email,
-        "password_hash": password_hash,
-        "salt": salt,
-        "created_at": datetime.now().isoformat(),
-        "last_login": None
-    }
-    
-    save_users(users)
-    
-    return {
-        "success": True,
-        "message": "User registered successfully"
-    }
+    try:
+        users_collection.insert_one({
+            "name": name,
+            "email": email,
+            "password_hash": password_hash,
+            "salt": salt,
+            "created_at": datetime.now(),
+            "last_login": None
+        })
+        
+        return {
+            "success": True,
+            "message": "User registered successfully"
+        }
+    except DuplicateKeyError:
+        return {
+            "success": False,
+            "message": "Email already registered"
+        }
 
 def login_user(email: str, password: str) -> Dict[str, Any]:
     """
     Login user and create session
     Returns: dict with success status, message, and session token
     """
-    users = load_users()
-    
     # Check if user exists
-    if email not in users:
+    user = users_collection.find_one({"email": email})
+    
+    if not user:
         return {
             "success": False,
             "message": "Invalid email or password"
         }
-    
-    user = users[email]
     
     # Verify password
     if not verify_password(password, user["password_hash"], user["salt"]):
@@ -178,8 +154,10 @@ def login_user(email: str, password: str) -> Dict[str, Any]:
         }
     
     # Update last login
-    user["last_login"] = datetime.now().isoformat()
-    save_users(users)
+    users_collection.update_one(
+        {"email": email},
+        {"$set": {"last_login": datetime.now()}}
+    )
     
     # Create session
     session_token = create_session(email)
@@ -198,11 +176,7 @@ def logout_user(session_token: str) -> Dict[str, Any]:
     """
     Logout user by invalidating session
     """
-    sessions = load_sessions()
-    
-    if session_token in sessions:
-        del sessions[session_token]
-        save_sessions(sessions)
+    sessions_collection.delete_one({"token": session_token})
     
     return {
         "success": True,
@@ -218,16 +192,14 @@ def get_user_info(session_token: str) -> Optional[Dict[str, Any]]:
     if not email:
         return None
     
-    users = load_users()
+    user = users_collection.find_one({"email": email})
     
-    if email not in users:
+    if not user:
         return None
-    
-    user = users[email]
     
     return {
         "name": user["name"],
         "email": user["email"],
-        "created_at": user["created_at"],
-        "last_login": user["last_login"]
+        "created_at": user["created_at"].isoformat() if isinstance(user["created_at"], datetime) else user["created_at"],
+        "last_login": user["last_login"].isoformat() if user["last_login"] and isinstance(user["last_login"], datetime) else user["last_login"]
     }
