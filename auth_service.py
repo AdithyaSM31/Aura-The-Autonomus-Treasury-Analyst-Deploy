@@ -16,18 +16,9 @@ MONGODB_URI = os.getenv("MONGODB_URI")
 if not MONGODB_URI:
     raise ValueError("MONGODB_URI environment variable is required")
 
-# Initialize MongoDB client - let pymongo handle TLS automatically with srv connection
+# Initialize MongoDB client with minimal settings
 try:
-    # Parse connection string and add parameters
-    if "?" in MONGODB_URI:
-        connection_string = f"{MONGODB_URI}&retryWrites=true&w=majority&ssl=true&ssl_cert_reqs=CERT_NONE"
-    else:
-        connection_string = f"{MONGODB_URI}?retryWrites=true&w=majority&ssl=true&ssl_cert_reqs=CERT_NONE"
-    
-    client = MongoClient(
-        connection_string,
-        serverSelectionTimeoutMS=10000
-    )
+    client = MongoClient(MONGODB_URI)
     db = client.aura_treasury
     users_collection = db.users
     sessions_collection = db.sessions
