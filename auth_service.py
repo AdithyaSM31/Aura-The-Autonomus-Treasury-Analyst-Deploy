@@ -76,16 +76,16 @@ except Exception as initial_error:
         except Exception as fallback_error:
             print(f"✗ Fallback failed: {fallback_error}")
             client = None
-            users_collection = None
-            sessions_collection = None
     else:
         client = None
+
+    if client:
+        db = client.aura_treasury
+        users_collection = db.users
+        sessions_collection = db.sessions
+    else:
         users_collection = None
         sessions_collection = None
-
-    db = client.aura_treasury
-    users_collection = db.users
-    sessions_collection = db.sessions
     
 except Exception as e:
     print(f"✗ MongoDB client initialization failed: {e}")
@@ -238,10 +238,10 @@ def login_user(email: str, password: str) -> Dict[str, Any]:
     Login user and create session
     Returns: dict with success status, message, and session token
     """
-    if not users_collection:
+    if users_collection is None:
         return {
             "success": False,
-            "message": "Database not available"
+            "message": "Database not available (Connection failed)"
         }
         
     try:
@@ -251,39 +251,63 @@ def login_user(email: str, password: str) -> Dict[str, Any]:
         if not user:
             return {
                 "success": False,
-                "message": "Invalid email or password"
+                "message": "Invalid email or password",
+                "error_code": "USER_NOT_FOUND" 
             }
         
-        # Verify password
+        # Verify password safely
+        if "password_hash" not in user or "salt" not in user:
+            return {
+                "success": False,
+                "message": "User data corrupted",
+                "error_code": "DATA_CORRUPTION"
+            }
+            
         if not verify_password(password, user["password_hash"], user["salt"]):
             return {
                 "success": False,
-                "message": "Invalid email or password"
+                "message": "Invalid email or password",
+                "error_code": "INVALID_CREDENTIALS"
             }
         
-        # Update last login
-        users_collection.update_one(
-            {"email": email},
-            {"$set": {"last_login": datetime.now()}}
-        )
+        # Update last login safely
+        try:
+            users_collection.update_one(
+                {"email": email},
+                {"$set": {"last_login": datetime.now()}}
+            )
+        except Exception as update_error:
+            print(f"Update last_login failed: {update_error}")
+            # Continue login even if update fails
         
         # Create session
-        session_token = create_session(email)
+        try:
+            session_token = create_session(email)
+        except Exception as session_error:
+             print(f"Session creation failed: {session_error}")
+             return {
+                "success": False,
+                "message": "Session creation failed",
+                "error_code": "SESSION_ERROR"
+            }
         
         return {
             "success": True,
             "message": "Login successful",
             "session_token": session_token,
             "user": {
-                "name": user["name"],
+                "name": user.get("name", "User"),
                 "email": user["email"]
             }
         }
     except Exception as e:
-        print(f"Login error: {e}")
+        print(f"Login error (Internal): {e}")
+        import traceback
+        traceback.print_exc()
         return {
             "success": False,
-            "message": "Database connection error. Please try again later."
+            "message": f"Login process error: {str(e)}",
+            "error_code": "INTERNAL_ERROR"
         }
 
 def logout_user(session_token: str) -> Dict[str, Any]:
