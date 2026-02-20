@@ -16,37 +16,72 @@ MONGODB_URI = os.getenv("MONGODB_URI")
 if not MONGODB_URI:
     raise ValueError("MONGODB_URI environment variable is required")
 
-# Initialize MongoDB client with standard connection string fallback
+# Initialize MongoDB client with manual fallback for unreliable DNS
 try:
     print(f"Connecting to MongoDB...")
     
     # Try standard connection first
-    try:
-        client = MongoClient(
-            MONGODB_URI, 
-            serverSelectionTimeoutMS=5000,
-            connectTimeoutMS=5000
-        )
-        # Force a connection check
-        client.admin.command('ping')
-        print("✓ MongoDB connected successfully (SRV)")
-    except Exception as srv_error:
-        print(f"⚠ SRV connection failed, trying direct connection fallback: {srv_error}")
-        
-        # Fallback for DNS issues: modify connection string if it's an SRV string
-        # This is a common fix for Render/internal network DNS issues
-        if "mongodb+srv://" in MONGODB_URI:
-            # You would typically need the direct node addresses here.
-            # Since we don't have them easily, we'll try a configuration tweak
-            # to disable SRV lookup if possible or rely on the error being transient.
-            # For now, let's try with different resolver settings if available,
-            # or just re-raise if we can't patch the URI.
-             
-            # Attempt to use a direct connection string if the user provides one, 
-            # or try to force a different connection method.
-            pass
-            
-        raise srv_error
+    client = MongoClient(
+        MONGODB_URI, 
+        serverSelectionTimeoutMS=5000,
+        connectTimeoutMS=5000
+    )
+    # Force a connection check
+    client.admin.command('ping')
+    print("✓ MongoDB connected successfully")
+    
+    db = client.aura_treasury
+    users_collection = db.users
+    sessions_collection = db.sessions
+
+except Exception as initial_error:
+    print(f"⚠ Connection failed: {initial_error}")
+    
+    # Fallback to hardcoded shard addresses if SRV fails (common on Render)
+    if "mongodb+srv://" in MONGODB_URI and "cluster0.mudye3a.mongodb.net" in MONGODB_URI:
+        print("⚠ Attempting fallback to direct shard connection...")
+        try:
+            # Extract credentials
+            from urllib.parse import urlparse
+            # Basic parsing to extract user:pass
+            # URI format: mongodb+srv://user:pass@host/...
+            parts = MONGODB_URI.split("@")
+            if len(parts) > 1:
+                creds = parts[0].split("//")[1]
+                
+                # Use the specific shards for this cluster found in logs
+                fallback_uri = (
+                    f"mongodb://{creds}@"
+                    "ac-is111og-shard-00-00.mudye3a.mongodb.net:27017,"
+                    "ac-is111og-shard-00-01.mudye3a.mongodb.net:27017,"
+                    "ac-is111og-shard-00-02.mudye3a.mongodb.net:27017/"
+                    "aura_treasury?ssl=true&replicaSet=atlas-28170096f3fb143d-shard-0&authSource=admin&retryWrites=true&w=majority"
+                )
+                
+                client = MongoClient(
+                    fallback_uri,
+                    serverSelectionTimeoutMS=10000,
+                    connectTimeoutMS=10000
+                )
+                db = client.aura_treasury
+                users_collection = db.users
+                sessions_collection = db.sessions
+                
+                client.admin.command('ping')
+                print("✓ MongoDB connected successfully using FALLBACK URI")
+            else:
+                client = None
+                users_collection = None
+                sessions_collection = None
+        except Exception as fallback_error:
+            print(f"✗ Fallback failed: {fallback_error}")
+            client = None
+            users_collection = None
+            sessions_collection = None
+    else:
+        client = None
+        users_collection = None
+        sessions_collection = None
 
     db = client.aura_treasury
     users_collection = db.users
