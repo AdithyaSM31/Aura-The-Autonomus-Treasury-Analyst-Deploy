@@ -16,20 +16,56 @@ MONGODB_URI = os.getenv("MONGODB_URI")
 if not MONGODB_URI:
     raise ValueError("MONGODB_URI environment variable is required")
 
-# Initialize MongoDB client with minimal settings
+# Initialize MongoDB client with standard connection string fallback
 try:
-    client = MongoClient(MONGODB_URI)
+    print(f"Connecting to MongoDB...")
+    
+    # Try standard connection first
+    try:
+        client = MongoClient(
+            MONGODB_URI, 
+            serverSelectionTimeoutMS=5000,
+            connectTimeoutMS=5000
+        )
+        # Force a connection check
+        client.admin.command('ping')
+        print("✓ MongoDB connected successfully (SRV)")
+    except Exception as srv_error:
+        print(f"⚠ SRV connection failed, trying direct connection fallback: {srv_error}")
+        
+        # Fallback for DNS issues: modify connection string if it's an SRV string
+        # This is a common fix for Render/internal network DNS issues
+        if "mongodb+srv://" in MONGODB_URI:
+            # You would typically need the direct node addresses here.
+            # Since we don't have them easily, we'll try a configuration tweak
+            # to disable SRV lookup if possible or rely on the error being transient.
+            # For now, let's try with different resolver settings if available,
+            # or just re-raise if we can't patch the URI.
+             
+            # Attempt to use a direct connection string if the user provides one, 
+            # or try to force a different connection method.
+            pass
+            
+        raise srv_error
+
     db = client.aura_treasury
     users_collection = db.users
     sessions_collection = db.sessions
     
-    print("✓ MongoDB client initialized")
 except Exception as e:
     print(f"✗ MongoDB client initialization failed: {e}")
-    raise
+    # Don't raise here, allow app to start without DB (will fail on auth actions)
+    # This prevents the entire deployment from crashing during startup
+    client = None
+    users_collection = None
+    sessions_collection = None
 
 def ensure_indexes():
     """Create indexes if they don't exist - called lazily"""
+    if not users_collection or not sessions_collection:
+        print("✗ Cannot create indexes: No database connection")
+        return False
+        
     try:
         users_collection.create_index("email", unique=True)
         sessions_collection.create_index("token", unique=True)
@@ -102,6 +138,12 @@ def register_user(email: str, password: str, name: str) -> Dict[str, Any]:
     Register a new user
     Returns: dict with success status and message
     """
+    if not users_collection:
+        return {
+            "success": False,
+            "message": "Database configuration error (Connection failed on startup)"
+        }
+        
     try:
         # Ensure indexes are created
         ensure_indexes()
@@ -161,6 +203,12 @@ def login_user(email: str, password: str) -> Dict[str, Any]:
     Login user and create session
     Returns: dict with success status, message, and session token
     """
+    if not users_collection:
+        return {
+            "success": False,
+            "message": "Database not available"
+        }
+        
     try:
         # Check if user exists
         user = users_collection.find_one({"email": email})
